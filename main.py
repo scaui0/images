@@ -145,7 +145,7 @@ def main():
         print("Can't load image!")
         return
 
-    print(f"Specified filters: {','.join(filters_to_apply.keys())}")
+    print(f"Specified filters: {','.join(filters_to_apply.keys())}")lol
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
         futures = {}
