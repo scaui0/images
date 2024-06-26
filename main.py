@@ -1,5 +1,6 @@
 import argparse
 import concurrent.futures
+from datetime import datetime
 from pathlib import Path
 
 from PIL import UnidentifiedImageError
@@ -80,11 +81,11 @@ ALL_FILTERS = {
     "ONLY_BLUE": Filters.only_blue,
     "WHITE_BLACK": Filters.white_black,
     "IN_THREE_STEPS": Filters.in_three_steps,
-    "ORIGINAL": None  # TODO: Is it a good idea?
+    "ORIGINAL": None  # Just works because if filter in filter_and_save is None, it won't be filtered and just saved
 }
 
 
-def filter_and_save(image, image_filter=None, path_to_save=None, filter_name=None):
+def filter_and_save(image, image_filter=None, path_to_save: Path | None = None, filter_name=None, image_name=None):
     if image_filter is None:
         filtered_image = image
     else:
@@ -94,7 +95,7 @@ def filter_and_save(image, image_filter=None, path_to_save=None, filter_name=Non
     else:
         filtered_image.show()
 
-    return filter_name
+    return filter_name, image_name
 
 
 def main():
@@ -102,12 +103,24 @@ def main():
         path = Path(path)
         return path if path.is_absolute() else CURRENT_PATH / path
 
+    def try_opening_image(image_path):
+        try:
+            return open_image(image_path).convert("RGBA")
+        except ValueError:
+            print("Unsupported image mode! Can't convert it to RGBA!")
+            return
+        except FileNotFoundError:
+            print(f"Can't find image at {image_path}! Make sure it is there and restart the program!")
+            return
+        except UnidentifiedImageError:
+            print("Can't load image!")
+            return
 
     parser = argparse.ArgumentParser(
         "Funny File Filters",
         description="Use Funny File Filters on your image and look at the amazing result!"
     )
-    parser.add_argument("image", help="The image file to convert")
+    parser.add_argument("input", help="The input file/folder")
     parser.add_argument("output", help="The output folder")
     parser.add_argument(
         "-f", "--filters", help="The filters to use, comma-separated. If unspecified, all will be used."
@@ -115,13 +128,12 @@ def main():
     parser.add_argument("-t", "--threads", type=int, default=10, help="The number of max threads to use. Default is 10")
     args = parser.parse_args()
 
-
-    image_path = path_relative_or_absolute(args.image)
+    input_path = path_relative_or_absolute(args.input)
     output_path = path_relative_or_absolute(args.output)
     max_threads = args.threads
 
-    print(f"Original Image: {image_path}")
-    print(f"Output Folder: {output_path}")
+    print(f"Input file/folder: {input_path}")
+    print(f"Output folder: {output_path}")
 
     if args.filters is None:
         filters_to_apply = ALL_FILTERS
@@ -133,42 +145,70 @@ def main():
             else:
                 print(f"Invalid filter {filter_name}! Ignoring it")
 
-    try:
-        original_image = open_image(image_path).convert("RGBA")
-    except ValueError:
-        print("Unsupported image mode! Can't convert it to RGBA!")
-        return
-    except FileNotFoundError:
-        print(f"Can't find image at {image_path}! Make sure it is there and restart the program!")
-        return
-    except UnidentifiedImageError:
-        print("Can't load image!")
-        return
-
     print(f"Specified filters: {','.join(filters_to_apply.keys())}")
 
+    time_before_starting_filtering = datetime.now()
+
+    future_arguments = []
+    if input_path.is_file():
+        original_image = try_opening_image(input_path)
+        if original_image is not None:
+            for filter_name, image_filter in filters_to_apply.items():
+                future_arguments.append((
+                    original_image.copy(),
+                    image_filter, output_path / f"{filter_name.lower()}.png",
+                    filter_name,
+                    input_path.stem
+                ))
+
+    elif input_path.is_dir():
+        for sub_file in input_path.iterdir():
+            if sub_file.suffix.lower() not in (".png", ".jpg"):
+                print(f"File {sub_file} has wrong suffix {sub_file.suffix}!")
+                continue
+
+            original_image = try_opening_image(sub_file)
+            if original_image is None:
+                continue
+
+            output_path_for_filtered_images = Path(output_path, sub_file.stem)
+            output_path_for_filtered_images.mkdir(exist_ok=True)
+
+            for filter_name, image_filter in filters_to_apply.items():
+                future_arguments.append((
+                    original_image.copy(),
+                    image_filter,
+                    output_path_for_filtered_images / f"{filter_name.lower()}.png",
+                    filter_name,
+                    sub_file.stem
+                ))
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-        futures = {}
-        for filter_name, image_filter in filters_to_apply.items():
-            futures[filter_name] = executor.submit(
-                filter_and_save,
-                original_image.copy(), image_filter, output_path / f"{filter_name.lower()}.png", filter_name
+        futures = []
+        for arguments in future_arguments:
+            futures.append(
+                executor.submit(
+                    filter_and_save, *arguments
+                )
             )
 
         print(f"Threads ({len(futures)} in total) are in the queue")
         print("Waiting for threads...")
         print()
-        for i, future in enumerate(concurrent.futures.as_completed(futures.values()), 1):
-            future_name = future.result()
-            if future_name is not None:
-                print(f"Thread {i}/{len(futures)} ({future_name}) is done!")
+        for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
+            future_name, file_name = future.result()
+            if future_name is not None and file_name is not None:  # Default, if no errors are in code
+                print(f"Thread {i}/{len(futures)} ({future_name} for file {file_name!r}) is done!")
             else:
                 print(f"Thread {i}/{len(futures)} is done!")
 
         print("All threads are done!")
+        print(f"Filtering took {datetime.now() - time_before_starting_filtering} seconds!")
+        # TODO: Add better timedelta output!
         print(
             f"To see the result of Funny File Filters, open the generated images in the output folder ({output_path})"
         )
+
 
 
 if __name__ == '__main__':
