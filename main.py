@@ -80,7 +80,7 @@ ALL_FILTERS = {
     "ONLY_BLUE": Filters.only_blue,
     "WHITE_BLACK": Filters.white_black,
     "IN_THREE_STEPS": Filters.in_three_steps,
-    "ORIGINAL": None  # TODO: Is it a good idea to do it so?
+    "ORIGINAL": None  # TODO: Is it a good idea?
 }
 
 
@@ -102,37 +102,12 @@ def main():
         path = Path(path)
         return path if path.is_absolute() else CURRENT_PATH / path
 
-    def submit_actions_for_single_file(executor, filters_to_apply, input_path, output_path):
-        if input_path.suffix not in (".png", ".jpg"):
-            print(f"{input_path} has wrong suffix! Skipping it")
-            return
-
-        try:
-            original_image = open_image(input_path).convert("RGBA")
-        except ValueError:
-            print("Unsupported image mode! Can't convert it to RGBA!")
-            return
-        except FileNotFoundError:
-            print(f"Can't find image at {input_path}! Make sure it is there and restart the program!")
-            return
-        except UnidentifiedImageError:
-            print("Can't load image!")
-            return
-
-        futures = {}
-        for filter_name, image_filter in filters_to_apply.items():
-            futures[filter_name] = executor.submit(
-                filter_and_save,
-                original_image.copy(), image_filter, output_path / f"{filter_name.lower()}.png", filter_name
-            )
-        return futures
-
 
     parser = argparse.ArgumentParser(
         "Funny File Filters",
         description="Use Funny File Filters on your image and look at the amazing result!"
     )
-    parser.add_argument("input", help="The input image/folder")
+    parser.add_argument("image", help="The image file to convert")
     parser.add_argument("output", help="The output folder")
     parser.add_argument(
         "-f", "--filters", help="The filters to use, comma-separated. If unspecified, all will be used."
@@ -141,11 +116,11 @@ def main():
     args = parser.parse_args()
 
 
-    input_path = path_relative_or_absolute(args.input)
+    image_path = path_relative_or_absolute(args.image)
     output_path = path_relative_or_absolute(args.output)
     max_threads = args.threads
 
-    print(f"Input Folder/File: {input_path}")
+    print(f"Original Image: {image_path}")
     print(f"Output Folder: {output_path}")
 
     if args.filters is None:
@@ -158,39 +133,37 @@ def main():
             else:
                 print(f"Invalid filter {filter_name}! Ignoring it")
 
+    try:
+        original_image = open_image(image_path).convert("RGBA")
+    except ValueError:
+        print("Unsupported image mode! Can't convert it to RGBA!")
+        return
+    except FileNotFoundError:
+        print(f"Can't find image at {image_path}! Make sure it is there and restart the program!")
+        return
+    except UnidentifiedImageError:
+        print("Can't load image!")
+        return
 
     print(f"Specified filters: {','.join(filters_to_apply.keys())}")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
         futures = {}
-        thread_count = 0
-
-        if input_path.is_dir():
-            for image_path in input_path.iterdir():
-                result = submit_actions_for_single_file(
-                    executor, filters_to_apply, image_path, output_path
-                )
-                futures[input_path] = result
-                thread_count += len(result)
-        elif input_path.is_file():
-            result = submit_actions_for_single_file(
-                executor, filters_to_apply, input_path, output_path
+        for filter_name, image_filter in filters_to_apply.items():
+            futures[filter_name] = executor.submit(
+                filter_and_save,
+                original_image.copy(), image_filter, output_path / f"{filter_name.lower()}.png", filter_name
             )
-            futures[input_path] = result
-            thread_count += len(result)
 
-        print(f"Threads ({thread_count} in total) are in the queue")
+        print(f"Threads ({len(futures)} in total) are in the queue")
         print("Waiting for threads...")
-
         print()
-
-        for i_file, (image_path, futures_for_image) in enumerate(futures.items(), 1):
-            for i, future in enumerate(concurrent.futures.as_completed(futures_for_image.values()), 1):
-                future_name = future.result()
-                if future_name is not None:
-                    print(f"Thread {i}/{len(futures)} ({future_name}) for file {i_file}({image_path}) is done!")
-                else:
-                    print(f"Thread {i}/{len(futures)} for file {i_file}({image_path}) is done!")
+        for i, future in enumerate(concurrent.futures.as_completed(futures.values()), 1):
+            future_name = future.result()
+            if future_name is not None:
+                print(f"Thread {i}/{len(futures)} ({future_name}) is done!")
+            else:
+                print(f"Thread {i}/{len(futures)} is done!")
 
         print("All threads are done!")
         print(
