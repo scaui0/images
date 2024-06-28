@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PIL import UnidentifiedImageError
-from PIL.Image import open as open_image
+from PIL.Image import open as open_image, fromarray
 
 
 CURRENT_PATH = Path(__file__).parent
@@ -34,33 +34,34 @@ class Filters:
             a if has_a else 0
         )
 
-    @classmethod
-    def without_red(cls, r, g, b, a):
-        return cls._without_helper(r, g, b, a, has_r=False)
+    @staticmethod
+    def without_red(r, g, b, a):
+        return 0, g, b, a
 
-    @classmethod
+    @staticmethod
     def without_green(cls, r, g, b, a):
-        return cls._without_helper(r, g, b, a, has_g=False)
+        return r, 0, b, a
 
-    @classmethod
-    def without_blue(cls, r, g, b, a):
-        return cls._without_helper(r, g, b, a, has_b=False)
+    @staticmethod
+    def without_blue(r, g, b, a):
+        return r, g, 0, a
 
     @staticmethod
     def white_black(r, g, b, a):
-        return *((((r + g + b) // 3),) * 3), a
+        median = (r + g + b) // 3
+        return median, median, median, a
 
-    @classmethod
-    def only_red(cls, r, g, b, a):
-        return cls._without_helper(r, g, b, a, has_g=False, has_b=False)
+    @staticmethod
+    def only_red(r, g, b, a):
+        return r, 0, 0, a
 
-    @classmethod
-    def only_green(cls, r, g, b, a):
-        return cls._without_helper(r, g, b, a, has_r=False, has_b=False)
+    @staticmethod
+    def only_green(r, g, b, a):
+        return 0, g, 0, a
 
-    @classmethod
-    def only_blue(cls, r, g, b, a):
-        return cls._without_helper(r, g, b, a, has_g=False, has_r=False)
+    @staticmethod
+    def only_blue(r, g, b, a):
+        return 0, 0, b, a
 
     @staticmethod
     def in_three_steps(r, g, b, a):
@@ -110,7 +111,7 @@ def main():
             print("Unsupported image mode! Can't convert it to RGBA!")
             return
         except FileNotFoundError:
-            print(f"Can't find image at {image_path}! Make sure it is there and restart the program!")
+            print(f"Can't find image at {image_path}!")
             return
         except UnidentifiedImageError:
             print("Can't load image!")
@@ -147,14 +148,14 @@ def main():
 
     print(f"Specified filters: {','.join(filters_to_apply.keys())}")
 
-    time_before_starting_filtering = datetime.now()
+    start_time = datetime.now()
 
-    future_arguments = []
+    task_arguments = []
     if input_path.is_file():
         original_image = try_opening_image(input_path)
         if original_image is not None:
             for filter_name, image_filter in filters_to_apply.items():
-                future_arguments.append((
+                task_arguments.append((
                     original_image.copy(),
                     image_filter, output_path / f"{filter_name.lower()}.png",
                     filter_name,
@@ -175,7 +176,7 @@ def main():
             output_path_for_filtered_images.mkdir(exist_ok=True)
 
             for filter_name, image_filter in filters_to_apply.items():
-                future_arguments.append((
+                task_arguments.append((
                     original_image.copy(),
                     image_filter,
                     output_path_for_filtered_images / f"{filter_name.lower()}.png",
@@ -185,7 +186,7 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
         futures = []
-        for arguments in future_arguments:
+        for arguments in task_arguments:
             futures.append(
                 executor.submit(
                     filter_and_save, *arguments
@@ -197,18 +198,16 @@ def main():
         print()
         for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
             future_name, file_name = future.result()
-            if future_name is not None and file_name is not None:  # Default, if no errors are in code
+            if future_name is not None and file_name is not None:  # Default if no errors are in code
                 print(f"Thread {i}/{len(futures)} ({future_name} for file {file_name!r}) is done!")
             else:
                 print(f"Thread {i}/{len(futures)} is done!")
 
         print("All threads are done!")
-        print(f"Filtering took {datetime.now() - time_before_starting_filtering} seconds!")
-        # TODO: Add better timedelta output!
+        print(f"Filtering took {(datetime.now() - start_time).total_seconds()} seconds!")
         print(
             f"To see the result of Funny File Filters, open the generated images in the output folder ({output_path})"
         )
-
 
 
 if __name__ == '__main__':
