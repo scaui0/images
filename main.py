@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PIL import UnidentifiedImageError
-from PIL.Image import open as open_image, fromarray
+from PIL.Image import open as open_image
 
 
 CURRENT_PATH = Path(__file__).parent
@@ -16,55 +16,45 @@ def filter_image(image, filter_function, copy_image=True):
 
     for x in range(image.width):
         for y in range(image.height):
-            image.putpixel((x, y), filter_function(*image.getpixel((x, y))))
+            pixel_color = image.getpixel((x, y))
+
+            image.putpixel((x, y), filter_function(*pixel_color))
 
     return image
 
 
 class Filters:
     @staticmethod
-    def _without_helper(
-            r, g, b, a,
-            has_r=True, has_g=True, has_b=True, has_a=True
-    ):
-        return (
-            r if has_r else 0,
-            g if has_g else 0,
-            b if has_b else 0,
-            a if has_a else 0
-        )
-
-    @staticmethod
-    def without_red(r, g, b, a):
+    def without_red(r, g, b, a=255):
         return 0, g, b, a
 
     @staticmethod
-    def without_green(cls, r, g, b, a):
+    def without_green(r, g, b, a=255):
         return r, 0, b, a
 
     @staticmethod
-    def without_blue(r, g, b, a):
+    def without_blue(r, g, b, a=255):
         return r, g, 0, a
 
     @staticmethod
-    def white_black(r, g, b, a):
+    def white_black(r, g, b, a=255):
         median = (r + g + b) // 3
         return median, median, median, a
 
     @staticmethod
-    def only_red(r, g, b, a):
+    def only_red(r, g, b, a=255):
         return r, 0, 0, a
 
     @staticmethod
-    def only_green(r, g, b, a):
+    def only_green(r, g, b, a=255):
         return 0, g, 0, a
 
     @staticmethod
-    def only_blue(r, g, b, a):
+    def only_blue(r, g, b, a=255):
         return 0, 0, b, a
 
     @staticmethod
-    def in_three_steps(r, g, b, a):
+    def in_three_steps(r, g, b, a=255):
         return (
             0 if r < 80 else 140 if r < 160 else 255,
             0 if g < 80 else 140 if g < 160 else 255,
@@ -126,7 +116,10 @@ def main():
     parser.add_argument(
         "-f", "--filters", help="The filters to use, comma-separated. If unspecified, all will be used."
     )
-    parser.add_argument("-t", "--threads", type=int, default=10, help="The number of max threads to use. Default is 10")
+    parser.add_argument(
+        "-t", "--threads", type=int, default=10,
+        help="The number of max processes to use. Default is 10"
+    )
     args = parser.parse_args()
 
     input_path = path_relative_or_absolute(args.input)
@@ -148,6 +141,13 @@ def main():
 
     print(f"Specified filters: {','.join(filters_to_apply.keys())}")
 
+    if isinstance(max_threads, int):
+        if max_threads <= 0:
+            parser.error("Argument 'threads' must be positive!")
+            return
+        elif max_threads > 61:
+            parser.error("Argument 'threads' must be less than or equals than 61!")
+
     start_time = datetime.now()
 
     task_arguments = []
@@ -163,15 +163,7 @@ def main():
                 ))
 
     elif input_path.is_dir():
-        for sub_file in input_path.iterdir():
-            if sub_file.suffix.lower() not in (".png", ".jpg"):
-                print(f"File {sub_file} has wrong suffix {sub_file.suffix}!")
-                continue
-
-            original_image = try_opening_image(sub_file)
-            if original_image is None:
-                continue
-
+        for sub_file in input_path.glob("*.*"):
             output_path_for_filtered_images = Path(output_path, sub_file.stem)
             output_path_for_filtered_images.mkdir(exist_ok=True)
 
@@ -206,8 +198,11 @@ def main():
         print("All threads are done!")
         print(f"Filtering took {(datetime.now() - start_time).total_seconds()} seconds!")
         print(
-            f"To see the result of Funny File Filters, open the generated images in the output folder ({output_path})"
+            f"Output saved in folder {output_path}"
         )
+        # Old message:
+        # f"To see the result of Funny File Filters,
+        # open the generated images in the output folder ({output_path})"
 
 
 if __name__ == '__main__':
