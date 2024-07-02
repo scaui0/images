@@ -76,7 +76,24 @@ ALL_FILTERS = {
 }
 
 
-def filter_and_save(image, image_filter=None, path_to_save: Path | None = None, filter_name=None, image_name=None):
+def try_opening_image(image_path):
+    try:
+        return open_image(image_path).convert("RGBA")
+    except ValueError:
+        print("Unsupported image mode! Can't convert it to RGBA!")
+        return
+    except FileNotFoundError:
+        print(f"Can't find image at {image_path}!")
+        return
+    except UnidentifiedImageError:
+        print("Can't load image!")
+        return
+
+
+def filter_and_save(image_path, image_filter=None, path_to_save: Path | None = None, filter_name=None, image_name=None):
+    if (image := try_opening_image(image_path)) is None:
+        return filter_name, image_name, False
+
     if image_filter is None:
         filtered_image = image
     else:
@@ -86,26 +103,43 @@ def filter_and_save(image, image_filter=None, path_to_save: Path | None = None, 
     else:
         filtered_image.show()
 
-    return filter_name, image_name
+    return filter_name, image_name, True
+
+
+def filter_and_save_multiple(image_paths, image_filters, paths_to_save):
+    if not (len(image_paths) == len(image_filters) == len(paths_to_save)):
+        raise IndexError("Len of images, image_filters and paths_to_save are not equals!")
+
+    result = []
+    for image_path, image_filters_for_file, path_to_save in zip(image_paths, image_filters, paths_to_save):
+        for filter_name, image_filter in image_filters_for_file.items():
+            result.append(
+                filter_and_save(image_path, image_filter, path_to_save / f"{filter_name.lower()}.png", filter_name, image_path.stem)
+            )
+    return result
+
+
+def path_relative_or_absolute(path):
+    path = Path(path)
+    return path if path.is_absolute() else CURRENT_PATH / path
+
+
+def chunk_list(input_list, x):
+    return [input_list[i:i + x] for i in range(0, len(input_list), x)]
+
+
+def split_list(input_list, x):
+    k, m = divmod(len(input_list), x)
+
+    return [input_list[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(x)]
 
 
 def main():
-    def path_relative_or_absolute(path):
-        path = Path(path)
-        return path if path.is_absolute() else CURRENT_PATH / path
-
-    def try_opening_image(image_path):
-        try:
-            return open_image(image_path).convert("RGBA")
-        except ValueError:
-            print("Unsupported image mode! Can't convert it to RGBA!")
-            return
-        except FileNotFoundError:
-            print(f"Can't find image at {image_path}!")
-            return
-        except UnidentifiedImageError:
-            print("Can't load image!")
-            return
+    filter_and_save_multiple(
+        (CURRENT_PATH / "input/025.jpg",),
+        (dict(ONLY_GREEN=ALL_FILTERS["ONLY_GREEN"]),),
+        (CURRENT_PATH / "output",)
+    )
 
     parser = argparse.ArgumentParser(
         "Funny File Filters",
@@ -152,36 +186,50 @@ def main():
 
     task_arguments = []
     if input_path.is_file():
-        original_image = try_opening_image(input_path)
-        if original_image is not None:
-            for filter_name, image_filter in filters_to_apply.items():
-                task_arguments.append((
-                    original_image.copy(),
-                    image_filter, output_path / f"{filter_name.lower()}.png",
-                    filter_name,
-                    input_path.stem
-                ))
+        task_arguments.append(
+            (input_path, filters_to_apply, output_path)
+        )
+
+        # original_image = try_opening_image(input_path)
+        # if original_image is not None:
+        #     for filter_name, image_filter in filters_to_apply.items():
+        #         task_arguments.append((
+        #             original_image.copy(),
+        #             image_filter, output_path / f"{filter_name.lower()}.png",
+        #             filter_name,
+        #             input_path.stem
+        #         ))
 
     elif input_path.is_dir():
         for sub_file in input_path.glob("*.*"):
             output_path_for_filtered_images = Path(output_path, sub_file.stem)
             output_path_for_filtered_images.mkdir(exist_ok=True)
 
-            for filter_name, image_filter in filters_to_apply.items():
-                task_arguments.append((
-                    original_image.copy(),
-                    image_filter,
-                    output_path_for_filtered_images / f"{filter_name.lower()}.png",
-                    filter_name,
-                    sub_file.stem
-                ))
+            task_arguments.append(
+                (sub_file, filters_to_apply, output_path_for_filtered_images)
+            )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            # for filter_name, image_filter in filters_to_apply.items():
+            #     task_arguments.append((
+            #         original_image.copy(),
+            #         image_filter,
+            #         output_path_for_filtered_images / f"{filter_name.lower()}.png",
+            #         filter_name,
+            #         sub_file.stem
+            #     ))
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_threads) as executor:
+        chunked = split_list(task_arguments, max_threads)
+        corrected = [
+            [[x[0] for x in chunked[chunk]]] + [[x[1] for x in chunked[chunk]]] + [[x[2] for x in chunked[chunk]]]
+            for chunk in range(len(chunked))
+        ]
+
         futures = []
-        for arguments in task_arguments:
+        for args in corrected:
             futures.append(
                 executor.submit(
-                    filter_and_save, *arguments
+                    filter_and_save_multiple, *args
                 )
             )
 
