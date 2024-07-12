@@ -1,12 +1,11 @@
 import argparse
 import concurrent.futures
-from string import Template
-
-import encodings.aliases
 import enum
 from datetime import datetime
 from pathlib import Path
+from string import Template
 
+import encodings.aliases
 from PIL import UnidentifiedImageError
 from PIL.Image import open as open_image
 
