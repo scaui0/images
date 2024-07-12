@@ -1,6 +1,5 @@
 from pathlib import Path
 from pprint import pprint
-from typing import List, Tuple, Any
 
 
 def partition_integers(tuples, groups):
@@ -13,11 +12,6 @@ def partition_integers(tuples, groups):
 
     return result
 
-tuples: List[
-    Tuple[
-        int, Any
-    ]
-]
 # def partition_integers(tuples, groups):
 #     result = [[] for _ in range(groups)]
 #     for value in sorted(tuples, reverse=True):
@@ -40,16 +34,7 @@ def main():
 
 
 if __name__ == '__main__':
-    from pathlib import Path
-
     CURRENT = Path(__file__).parent
+    CURRENT_FILE = Path(__file__)
 
-
-    full_path = CURRENT / "input/minecraft/textures/block/bamboo_block.png"
-    start_path = CURRENT / "input"
-
-    relative_path = full_path.relative_to(start_path)
-    print("Relative path using pathlib:", relative_path)
-
-
-    print(list((CURRENT / "input").rglob("*")))
+    print(CURRENT_FILE.relative_to(CURRENT_FILE))

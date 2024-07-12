@@ -1,5 +1,9 @@
 import argparse
 import concurrent.futures
+from string import Template
+
+import encodings.aliases
+import enum
 from datetime import datetime
 from pathlib import Path
 
@@ -23,37 +27,57 @@ def filter_image(image, filter_function, copy_image=True):
     return image
 
 
+class Filter:
+    ALL = {}
+
+    def __init__(self, name):
+        self.name = name
+
+    def __call__(self, func):
+        func.name = self.name
+        Filter.ALL[self.name] = func
+        return func
+
+
 class Filters:
     @staticmethod
+    @Filter("WITHOUT_RED")
     def without_red(r, g, b, a=255):
         return 0, g, b, a
 
     @staticmethod
+    @Filter("WITHOUT_GREEN")
     def without_green(r, g, b, a=255):
         return r, 0, b, a
 
     @staticmethod
+    @Filter("WITHOUT_BLUE")
     def without_blue(r, g, b, a=255):
         return r, g, 0, a
 
     @staticmethod
+    @Filter("WHITE_BLACK")
     def white_black(r, g, b, a=255):
         median = (r + g + b) // 3
         return median, median, median, a
 
     @staticmethod
+    @Filter("ONLY_RED")
     def only_red(r, g, b, a=255):
         return r, 0, 0, a
 
     @staticmethod
+    @Filter("ONLY_GREEN")
     def only_green(r, g, b, a=255):
         return 0, g, 0, a
 
     @staticmethod
+    @Filter("ONLY_BLUE")
     def only_blue(r, g, b, a=255):
         return 0, 0, b, a
 
     @staticmethod
+    @Filter("IN_THREE_STEPS")
     def in_three_steps(r, g, b, a=255):
         return (
             0 if r < 80 else 140 if r < 160 else 255,
@@ -62,72 +86,89 @@ class Filters:
             0 if a < 80 else 140 if a < 160 else 255
         )
 
-
-ALL_FILTERS = {
-    "WITHOUT_RED": Filters.without_red,
-    "WITHOUT_GREEN": Filters.without_green,
-    "WITHOUT_BLUE": Filters.without_blue,
-    "ONLY_RED": Filters.only_red,
-    "ONLY_GREEN": Filters.only_green,
-    "ONLY_BLUE": Filters.only_blue,
-    "WHITE_BLACK": Filters.white_black,
-    "IN_THREE_STEPS": Filters.in_three_steps,
-    "ORIGINAL": None  # Just works because if filter in filter_and_save is None, it won't be filtered and just saved
-}
+    @staticmethod
+    @Filter("INVERT")
+    def invert(r, g, b, a=255):
+        return 255 - r, 255 - g, 255 - b, a
+    
+    @staticmethod
+    @Filter("ORIGINAL")
+    def original(r, g, b, a=255):
+        return r, g, b, a
 
 
 def try_opening_image(image_path):
     try:
         return open_image(image_path).convert("RGBA")
     except ValueError:
-        print("Unsupported image mode! Can't convert it to RGBA!")
-        return
+        print(f"Unsupported image mode! Can't convert it to RGBA! ({image_path})")
     except FileNotFoundError:
         print(f"Can't find image at {image_path}!")
-        return
     except UnidentifiedImageError:
         print(f"Can't load image! ({image_path})")
-        return
     except PermissionError:
         if not image_path.is_dir():
             print(f"Permission denied! ({image_path})")
-        return
 
 
-def filter_and_save(image_path, image_filter=None, path_to_save: Path | None = None, filter_name=None, image_name=None):
+def filter_and_save(
+        image_path: Path, image_filter=None, path_to_save: Path | None = None, filter_name=None, image_name=None,
+        other_files=False, encoding_for_other_files=None
+):
     if (image := try_opening_image(image_path)) is None:
-        return filter_name, image_name, False
+        if other_files == OtherFileActions.copy:
+            path_to_save.with_suffix(image_path.suffix).write_bytes(image_path.read_bytes())
+            return "COPIED", image_name, True
+        elif other_files == OtherFileActions.template:
+            try:
+                path_to_save.with_suffix(image_path.suffix).write_text(
+                    Template(
+                        image_path.read_text(encoding=encoding_for_other_files)
+                    ).safe_substitute(
+                        dict(
+                            FILTER_UPPER=filter_name, FILTER_LOWER=filter_name.lower(),
+                            FILTER=filter_name.lower().replace("_", " ")
+                        )
+                    ),
+                    encoding=encoding_for_other_files
+                )
+                return "TEMPLATED", image_name, True
+            except UnicodeDecodeError:
+                pass
+            return "TEMPLATED", image_name, False
+
+        else:
+            return filter_name, image_name, False
 
     if image_filter is None:
         filtered_image = image
     else:
         filtered_image = filter_image(image, image_filter, copy_image=False)
     if path_to_save is not None:
-        filtered_image.save(path_to_save)
+        filtered_image.save(path_to_save.with_suffix(".png"))
     else:
         filtered_image.show()
 
     return filter_name, image_name, True
 
 
-def filter_and_save_multiple(image_paths, image_filters, paths_to_save, sort_by_filter=None, last_paths=None):
-    if not (len(image_paths) == len(image_filters) == len(paths_to_save)):
-        raise IndexError("Len of images, image_filters and paths_to_save are not equals!")
-
+def filter_and_save_multiple(args, other_files, encoding_for_other_files):
     result = []
-    for image_path, image_filters_for_file, path_to_save, sort_image_by_filter, last_path_for_image \
-            in zip(image_paths, image_filters, paths_to_save, sort_by_filter, last_paths):
-
-        for filter_name, image_filter in image_filters_for_file.items():
+    for image_path, image_filters, path_to_save, sort_by_filter, path_extension in args:
+        for filter_name, image_filter in image_filters.items():
+            if image_path.is_dir():
+                continue
             if sort_by_filter:
-                real_path_to_save = path_to_save / f"{filter_name.lower()}" / last_path_for_image
-                real_path_to_save.parent.mkdir(exist_ok=True, parents=True)
-
+                end_path_to_save = path_to_save / f"{filter_name.lower()}" / path_extension
+                end_path_to_save.parent.mkdir(exist_ok=True, parents=True)
             else:
-                real_path_to_save = path_to_save / f"{filter_name.lower()}.png"
+                end_path_to_save = path_to_save / f"{filter_name.lower()}.png"  # The last suffix is redundancy.
 
             result.append(
-                filter_and_save(image_path, image_filter, real_path_to_save, filter_name, image_path.stem)
+                filter_and_save(
+                    image_path, image_filter, end_path_to_save, filter_name, image_path.stem,
+                    other_files, encoding_for_other_files
+                )
             )
     return result
 
@@ -143,6 +184,12 @@ def split_list(input_list, x):
     return [input_list[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(x)]
 
 
+class OtherFileActions(enum.Enum):
+    template = enum.auto()
+    dont_copy = enum.auto()
+    copy = enum.auto()
+
+
 def main():
     parser = argparse.ArgumentParser(
         "Funny File Filters",
@@ -151,52 +198,91 @@ def main():
     parser.add_argument("input", help="The input file/folder")
     parser.add_argument("output", help="The output folder")
     parser.add_argument(
-        "-f", "--filters", help="The filters to use, comma-separated. If unspecified, all will be used."
+        "-f", "--filters",
+        help="The filters to use, comma-separated. If unspecified, all will be used. Available filters are: "
+             "WITHOUT_RED,WITHOUT_GREEN,WITHOUT_BLUE,ONLY_RED,ONLY_GREEN,ONLY_BLUE,WHITE_BLACK,IN_THREE_STEPS,"
+             "ORIGINAL,INVERT"
     )
     parser.add_argument(
-        "-t", "--threads", type=int, default=10,
-        help="The number of max processes to use. Default is 10"
+        "-p", "--processes", type=int, default=10,
+        help="The number of max processes to use. Default is 10."
     )
     parser.add_argument(
         "-s", "--sort-by-filter", action="store_true",
         help="Sorts the images by filter name."
     )
+    other_files_argument = parser.add_mutually_exclusive_group()
+    other_files_argument.add_argument(
+        "-c", "--copy-other-files", action="store_true",
+        help="Copy non-image files into the corresponding location in the output folder."
+    )
+    other_files_argument.add_argument(
+        "-t", "--use-template", action="store_true",
+        help="Use template on non-image files and save them in the output folder. "
+             "Templates with example result: "
+             "$FILTER(black white), $FILTER_UPPER(BLACK_WHITE) and $FILTER_LOWER(black_white). "
+             "You can also use the syntax ${<filter name>}"
+    )
+    parser.add_argument(
+        "-e", "--other-file-encoding",
+        help="Encoding to use on non-image files."
+    )
     args = parser.parse_args()
 
     input_path = path_relative_or_absolute(args.input)
     output_path = path_relative_or_absolute(args.output)
-    max_threads = args.threads
+    max_processes = args.processes
     sort_by_filter = args.sort_by_filter
+
+    keep_other_files = args.copy_other_files
+    use_template_on_other_files = args.use_template
+
+    other_file_encoding = args.other_file_encoding
 
     print(f"Input file/folder: {input_path}")
     print(f"Output folder: {output_path}")
 
     if args.filters is None:
-        filters_to_apply = ALL_FILTERS
+        filters_to_apply = Filter.ALL
     else:
         filters_to_apply = {}
         for filter_name in args.filters.split(","):
-            if filter_name in ALL_FILTERS:
-                filters_to_apply[filter_name] = ALL_FILTERS[filter_name]
+            if filter_name in Filter.ALL:
+                filters_to_apply[filter_name] = Filter.ALL[filter_name]
             else:
                 print(f"Invalid filter {filter_name}! Ignoring it")
 
     print(f"Specified filters: {','.join(filters_to_apply.keys())}")
-    print(f"Sort by filters: {sort_by_filter}")
+    print(f"Sort output by filters: {sort_by_filter}")
 
-    if isinstance(max_threads, int):
-        if max_threads <= 0:
-            parser.error("Argument 'threads' must be positive!")
-            return
-        elif max_threads > 61:
-            parser.error("Argument 'threads' must be less than or equals than 61!")
+    if keep_other_files:
+        other_files = OtherFileActions.copy
+        print("Non-image files will be copied into the output folder.")
+    elif use_template_on_other_files:
+        other_files = OtherFileActions.template
+        print("A template will be applied to all non-image files.")
+    else:
+        other_files = OtherFileActions.dont_copy
+        print("Non-image files won't be copied.")
+
+    if other_file_encoding not in [None] + list(encodings.aliases.aliases.values()):
+        parser.error(
+            "Argument 'other-file-encodings' must be unset or one of these values: "
+            f"{set(encodings.aliases.aliases.values())}"
+        )
+
+    if isinstance(max_processes, int):
+        if max_processes <= 0:
+            parser.error("Argument 'processes' must be positive!")
+        elif max_processes > 61:
+            parser.error("Argument 'processes' must be less than or equals than 61!")
 
     start_time = datetime.now()
 
     task_arguments = []
     if input_path.is_file():
         task_arguments.append(
-            (input_path, filters_to_apply, output_path, sort_by_filter)
+            (input_path, filters_to_apply, output_path, sort_by_filter, Path())
         )
 
     elif input_path.is_dir():
@@ -204,7 +290,8 @@ def main():
             relativ_to_input_path = sub_file.relative_to(input_path)
 
             if sort_by_filter:
-                output_path_for_filtered_images = output_path  # Can't do it here. It's done in filter_and_save_multiple
+                output_path_for_filtered_images = output_path  # Can't join a save path here. It's done in
+                # filter_and_save_multiple
             else:
                 output_path_for_filtered_images = output_path / relativ_to_input_path
 
@@ -214,27 +301,15 @@ def main():
                 (sub_file, filters_to_apply, output_path_for_filtered_images, sort_by_filter, relativ_to_input_path)
             )
 
-
-    def prepare_arguments_for_task(arguments):
-        return [
-            [[x[0] for x in arguments[chunk]]]
-            + [[x[1] for x in arguments[chunk]]]
-            + [[x[2] for x in arguments[chunk]]]
-            + [[x[3] for x in arguments[chunk] if len(x) >= 3]]
-            + [[x[4] for x in arguments[chunk] if len(x) >= 3]]
-            for chunk in range(len(arguments))
-        ]
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_threads) as executor:
-        chunked = split_list(task_arguments, max_threads)
-        corrected = prepare_arguments_for_task(chunked)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_processes) as executor:
+        chunked = split_list(task_arguments, max_processes)
 
         futures = []
-        for args in corrected:
+        for args in chunked:
             if args:
                 futures.append(
                     executor.submit(
-                        filter_and_save_multiple, *args
+                        filter_and_save_multiple, args, other_files, other_file_encoding
                     )
                 )
 
