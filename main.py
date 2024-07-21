@@ -280,9 +280,10 @@ def main():
 
     task_arguments = []
     if input_path.is_file():
-        task_arguments.append(
-            (input_path, filters_to_apply, output_path, sort_by_filter, Path())
-        )
+        for filter_name, image_filter in filters_to_apply.items():
+            task_arguments.append(
+                (input_path, {filter_name: image_filter}, output_path, sort_by_filter, Path())
+            )
 
     elif input_path.is_dir():
         for sub_file in input_path.rglob("*"):
@@ -296,9 +297,10 @@ def main():
 
             output_path_for_filtered_images.mkdir(exist_ok=True)
 
-            task_arguments.append(
-                (sub_file, filters_to_apply, output_path_for_filtered_images, sort_by_filter, relativ_to_input_path)
-            )
+            for filter_name, image_filter in filters_to_apply.items():
+                task_arguments.append(
+                    (sub_file, {filter_name: image_filter}, output_path_for_filtered_images, sort_by_filter, relativ_to_input_path)
+                )
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_processes) as executor:
         chunked = split_list(task_arguments, max_processes)
