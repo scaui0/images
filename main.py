@@ -161,7 +161,7 @@ def filter_and_save_multiple(args, other_files, encoding_for_other_files):
                 end_path_to_save = path_to_save / f"{filter_name.lower()}" / path_extension
                 end_path_to_save.parent.mkdir(exist_ok=True, parents=True)
             else:
-                end_path_to_save = path_to_save / f"{filter_name.lower()}.png"  # The last suffix is redundancy.
+                end_path_to_save = path_to_save / f"{filter_name.lower()}.png"  # The last suffix is redundancy. It's overriden filter_and_save
 
             result.append(
                 filter_and_save(
@@ -172,9 +172,17 @@ def filter_and_save_multiple(args, other_files, encoding_for_other_files):
     return result
 
 
-def path_relative_or_absolute(path):
+def path_relative_or_absolute(path, path_start):
+    """Converts a relative or absolute path to an absolute path.
+
+    When an absolute path must be joined, it joins path_start and path.
+
+    :param path_start:
+    :param path: The relative or absolute path of the path.
+    :return: The input path converted to an absolute path.
+    """
     path = Path(path)
-    return path if path.is_absolute() else CURRENT_PATH / path
+    return path if path.is_absolute() else path_start / path
 
 
 def split_list(input_list, x):
@@ -198,9 +206,8 @@ def main():
     parser.add_argument("output", help="The output folder")
     parser.add_argument(
         "-f", "--filters",
-        help="The filters to use, comma-separated. If unspecified, all will be used. Available filters are: "
-             "WITHOUT_RED,WITHOUT_GREEN,WITHOUT_BLUE,ONLY_RED,ONLY_GREEN,ONLY_BLUE,WHITE_BLACK,IN_THREE_STEPS,"
-             "ORIGINAL,INVERT"
+        help="The filters to use, comma-separated. If unspecified, all will be used. Available filters are: " +
+             ",".join(Filter.ALL.keys()),
     )
     parser.add_argument(
         "-p", "--processes", type=int, default=10,
@@ -228,15 +235,18 @@ def main():
     )
     args = parser.parse_args()
 
-    input_path = path_relative_or_absolute(args.input)
-    output_path = path_relative_or_absolute(args.output)
+    input_path = path_relative_or_absolute(args.input, CURRENT_PATH)
+    output_path = path_relative_or_absolute(args.output, CURRENT_PATH)
     max_processes = args.processes
     sort_by_filter = args.sort_by_filter
 
     keep_other_files = args.copy_other_files
     use_template_on_other_files = args.use_template
-
     other_file_encoding = args.other_file_encoding
+
+
+    if not input_path.exists():  # If output_path doesn't exist, it will be created automatically.
+        parser.error(f"Input path does not exist! {input_path}")
 
     print(f"Input file/folder: {input_path}")
     print(f"Output folder: {output_path}")
@@ -290,17 +300,20 @@ def main():
             relativ_to_input_path = sub_file.relative_to(input_path)
 
             if sort_by_filter:
-                output_path_for_filtered_images = output_path  # Can't join a save path here. It's done in
+                output_path_for_filtered_images = output_path  # Can't join the save path here. It's done in
                 # filter_and_save_multiple
             else:
                 output_path_for_filtered_images = output_path / relativ_to_input_path
 
-            output_path_for_filtered_images.mkdir(exist_ok=True)
+            output_path_for_filtered_images.mkdir(exist_ok=True, parents=True)
 
             for filter_name, image_filter in filters_to_apply.items():
                 task_arguments.append(
                     (sub_file, {filter_name: image_filter}, output_path_for_filtered_images, sort_by_filter, relativ_to_input_path)
                 )
+    else:
+        print()
+        parser.error(f"Error: Input file is neither file nor folder. It is {input_path}")
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_processes) as executor:
         chunked = split_list(task_arguments, max_processes)
